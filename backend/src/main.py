@@ -1,3 +1,5 @@
+import logging
+from asyncio.log import logger
 import os
 from dotenv import load_dotenv
 
@@ -7,21 +9,26 @@ load_dotenv()
 from fastapi import FastAPI
 from src.database import engine, Base
 from src.auth import router as auth_router
+from src.story import router as story_router  # New router for story endpoints
 
 app = FastAPI()
 
 # Include auth routes
 app.include_router(auth_router, prefix="/auth")
+app.include_router(story_router, prefix="/story")  # Include story routes
 
 @app.on_event("startup")
 async def startup():
     # Create database tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Create audio directory
+    os.makedirs("src/audio", exist_ok=True)
 
 @app.get("/")
 async def health_check():
-    return {"status": "healthy", "message": "JWT Auth with PostgreSQL"}
+    return {"status": "healthy", "message": "JWT Auth with PostgreSQL & Storytelling Service"}
 
 if __name__ == "__main__":
     import uvicorn
