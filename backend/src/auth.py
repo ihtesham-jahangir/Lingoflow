@@ -14,16 +14,18 @@ from email.utils import formataddr
 from pydantic import BaseModel
 from typing import Optional
 import time  # For retry logic
-
+from src.security import verify_password
 from src.database import get_db
-from src.schemas import UserCreate, User, Token, PasswordReset, NewPassword
+from src.schemas import UserCreate, User, Token, PasswordReset, NewPassword , LoginRequest
 from src.auth_utils import create_access_token, decode_token, authenticate_user
 from src.crud import (
     get_user_by_email, create_user, update_user_password,
     create_otp, mark_otp_as_used, get_otp_by_email_and_code,
-    update_user_verified
+    update_user_verified,
+    get_user_by_identifier,
+    get_user_by_username
 )
-
+from src.utils import generate_unique_username
 router = APIRouter(tags=["Authentication"])
 
 # Configure logging
@@ -527,58 +529,47 @@ async def verify_email(
 
     return {"message": "Email verified successfully"}
 
-# POST /signup
+# ─────────── SIGN-UP ───────────
 @router.post("/signup", response_model=User, status_code=status.HTTP_201_CREATED)
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)) -> User:
-    db_user = await get_user_by_email(db, user.email)
-    if db_user:
+    if await get_user_by_email(db, user.email):
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    if user.username and await get_user_by_username(db, user.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
+
+    # generate username if none supplied
+    username = user.username or await generate_unique_username(db)
+
     try:
+        # send OTP
         otp = generate_otp()
         expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
-
         if not deliver_otp(user.email, otp):
             raise HTTPException(status_code=500, detail="Failed to send verification email")
 
         await create_otp(db, user.email, otp, expires_at)
 
+        # persist user
         user_data = user.model_dump()
+        user_data["username"] = username
         created_user = await create_user(db, user_data)
-
         return created_user
+
     except Exception as e:
-        logger.error(f"Signup failed for {user.email}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
+        logger.error(f"Signup failed for {user.email}: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed, please try again")
 
-# POST /login
+
+# ─────────── LOGIN ───────────
 @router.post("/login", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncSession = Depends(get_db)
-) -> Token:
-    user = await authenticate_user(form_data.username, form_data.password, db)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token:
+    user = await get_user_by_identifier(db, data.identifier)
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email not verified",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
-    )
-
-    return {"access_token": access_token, "token_type": "bearer"}
-
+    access_token = create_access_token({"sub": str(user.id)})
+    return Token(access_token=access_token, token_type="bearer")
 # POST /forgot-password
 @router.post("/forgot-password")
 async def forgot_password(

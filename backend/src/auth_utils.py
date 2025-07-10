@@ -1,32 +1,58 @@
+"""
+Holds JWT helpers *and* DB-aware `authenticate_user`
+so the main router can stay slim.
+"""
 import os
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
+from typing import Any, Optional
+
+from jose import jwt, JWTError
 from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.security import verify_password
-from src.crud import get_user_by_email
+from src.crud import get_user_by_email, get_user_by_username
+
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me")
+ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
+)
 
-def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
+
+# ─── JWT ─────────────────────────────────────────────────────
+def create_access_token(
+    data: dict[str, Any],
+    expires_delta: Optional[timedelta] = None,
+) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def decode_token(token: str) -> dict:
+
+def decode_token(token: str) -> dict[str, Any] | None:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
 
-async def authenticate_user(email: str, password: str, db):
- # Local import to avoid circular dependency
-    
-    user = await get_user_by_email(db, email)
-    if not user or not verify_password(password, user.hashed_password):
-        return False
-    return user
+
+# ─── Auth ────────────────────────────────────────────────────
+async def authenticate_user(
+    identifier: str,
+    password: str,
+    db: AsyncSession,
+) -> Optional[int]:  # returns user.id if OK
+    if "@" in identifier:
+        user = await get_user_by_email(db, identifier)
+    else:
+        user = await get_user_by_username(db, identifier)
+
+    if user and verify_password(password, user.hashed_password):
+        return user.id
+    return None

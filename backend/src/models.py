@@ -1,18 +1,34 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, Date, UniqueConstraint
 from src.database import Base
 from datetime import datetime
 
 class User(Base):
     __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        UniqueConstraint("username", name="uq_users_username"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    email         = Column(String, nullable=False, index=True)
+    username      = Column(String(50), nullable=False, index=True)   # ← NEW
+
+    first_name    = Column(String(100), nullable=False)              # ← NEW
+    last_name     = Column(String(100), nullable=False)              # ← NEW
+    country       = Column(String(100))                              # ← NEW
+    city          = Column(String(100))                              # ← NEW
+    phone_number  = Column(String(30))                               # ← NEW
+    date_of_birth = Column(Date)                                     # ← NEW
+
     hashed_password = Column(String, nullable=False)
-    full_name = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True)
+
+    is_active    = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
-    is_verified = Column(Boolean, default=False)
-# OTP table model
+    is_verified  = Column(Boolean, default=False)
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
 class OTP(Base):
     __tablename__ = "otps"
     

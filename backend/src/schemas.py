@@ -1,13 +1,28 @@
 from typing import Dict, List
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import Column, Integer, String, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
+from datetime import date
 
 Base = declarative_base()
 
+# ─────────── User ────────────
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: str
+
+    # now optional
+    username: str | None = Field(
+        default=None, min_length=3, max_length=50,
+        description="Omit to receive a random username",
+    )
+
+    first_name: str
+    last_name: str
+
+    country: str | None = None
+    city: str | None = None
+    phone_number: str | None = None
+    date_of_birth: date | None = None
 
 class UserCreate(UserBase):
     password: str
@@ -16,9 +31,11 @@ class User(UserBase):
     id: int
     is_active: bool
     is_superuser: bool
-    
+    is_verified: bool
+
     class Config:
         from_attributes = True
+
 
 class Token(BaseModel):
     access_token: str
@@ -60,3 +77,6 @@ class StoryResponse(BaseModel):
     choices: Dict[int, str]
     audio_url: str
     context_token: str
+class LoginRequest(BaseModel):
+    identifier: str  # email OR username
+    password: str
