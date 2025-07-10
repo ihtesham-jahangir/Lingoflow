@@ -147,3 +147,18 @@ async def update_story_session(
 
 async def get_story_session(db: AsyncSession, session_id: int) -> Optional[StorySession]:
     return await db.get(StorySession, session_id)
+async def update_reset_password_otp_verified(db: AsyncSession, user_id: int, verified: bool) -> None:
+    stmt = (
+        select(User)
+        .where(User.id == user_id)
+    )
+    
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    
+    if user:
+        user.reset_password_otp_verified = verified
+        await db.commit()
+        await db.refresh(user)
+    else:
+        raise Exception("User not found")

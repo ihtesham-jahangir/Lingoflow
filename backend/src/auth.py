@@ -23,7 +23,7 @@ from src.crud import (
     create_otp, mark_otp_as_used, get_otp_by_email_and_code,
     update_user_verified,
     get_user_by_identifier,
-    get_user_by_username
+    get_user_by_username,update_reset_password_otp_verified
 )
 from src.utils import generate_unique_username
 router = APIRouter(tags=["Authentication"])
@@ -633,3 +633,33 @@ async def reset_password(new_pw: NewPassword, db: AsyncSession = Depends(get_db)
     await update_user_password(db, email, new_password)
 
     return {"message": "Password updated successfully"}
+@router.post("/verify-reset-otp")
+async def verify_reset_otp(
+    request: VerifyEmailRequest,  # OTP verification request model
+    db: AsyncSession = Depends(get_db)
+):
+    email = request.email
+    otp_code = request.otp
+
+    # Fetch OTP from the database using the provided email and OTP code
+    otp = await get_otp_by_email_and_code(db, email, otp_code)
+    
+    if not otp:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not found")
+    
+    if otp.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has expired")
+    
+    if otp.is_used:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has already been used")
+
+    # OTP is valid, update the user's `reset_password_otp_verified` field
+    user = await get_user_by_email(db, email)
+    
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Update the reset_password_otp_verified field
+    await update_reset_password_otp_verified(db, user.id, True)
+    
+    return {"message": "OTP successfully verified and password reset allowed"}
