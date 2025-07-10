@@ -529,6 +529,32 @@ async def verify_email(
 
     return {"message": "Email verified successfully"}
 
+class ResendOTPRequest(BaseModel):
+    email: str
+# ─────────── Resend OTP Endpoint ───────────
+@router.post("/resend-otp")
+async def resend_otp(request: ResendOTPRequest, db: AsyncSession = Depends(get_db)):
+    email = request.email
+
+    # Check if the user exists
+    user = await get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Generate a new OTP
+    otp = generate_otp()
+    expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+
+    # Store the new OTP in the database
+    await create_otp(db, email, otp, expires_at)
+
+    # Send OTP via email
+    if not deliver_otp(email, otp):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP email")
+
+    return {"message": "OTP resent successfully"}
+
+
 # ─────────── SIGN-UP ───────────
 @router.post("/signup", response_model=User, status_code=status.HTTP_201_CREATED)
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)) -> User:
