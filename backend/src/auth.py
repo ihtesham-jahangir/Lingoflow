@@ -498,10 +498,6 @@ def deliver_otp(email: str, otp: str) -> bool:
 class VerifyEmailRequest(BaseModel):
     email: str
     otp: str
-class NewPassword(BaseModel):
-    email: str
-    otp: str
-    new_password: str
 
 
 # POST /verify-email
@@ -613,31 +609,26 @@ async def forgot_password(
     deliver_otp(reset.email, otp)
 
     return {"message": "OTP for password reset sent"}
-
+class NewPassword(BaseModel):
+    email: str
+    new_password: str
 # ─────────── Reset Password Endpoint ───────────
 @router.post("/reset-password")
-async def reset_password(
-    new_pw: NewPassword,  # Expecting OTP instead of token
-    db: AsyncSession = Depends(get_db)
-) -> dict:
+async def reset_password(new_pw: NewPassword, db: AsyncSession = Depends(get_db)) -> dict:
     email = new_pw.email
-    otp_code = new_pw.otp  # Using OTP for validation
     new_password = new_pw.new_password
 
-    # Get OTP from the database based on the email and the code provided
-    otp = await get_otp_by_email_and_code(db, email, otp_code)
+    # Get user from database
+    user = await get_user_by_email(db, email)
     
-    # Check if the OTP is not found, expired, or already used
-    if not otp:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not found")
-    if otp.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has expired")
-    if otp.is_used:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has already been used")
+    # Check if user exists
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not found")
 
-    # Mark OTP as used
-    await mark_otp_as_used(db, otp.id)
-
+    # Check if OTP for password reset has been verified
+    if not user.reset_password_otp_verified:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not verified. Please verify OTP before resetting your password.")
+    
     # Update the user's password
     await update_user_password(db, email, new_password)
 

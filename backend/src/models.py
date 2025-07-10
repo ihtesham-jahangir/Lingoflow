@@ -25,10 +25,11 @@ class User(Base):
     is_active    = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
     is_verified  = Column(Boolean, default=False)
-
+    reset_password_otp_verified = Column(Boolean, default=False)
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
+    
 class OTP(Base):
     __tablename__ = "otps"
     
