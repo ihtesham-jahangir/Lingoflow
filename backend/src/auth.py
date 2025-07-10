@@ -614,7 +614,7 @@ async def forgot_password(
 
     return {"message": "OTP for password reset sent"}
 
-# POST /reset-password
+# ─────────── Reset Password Endpoint ───────────
 @router.post("/reset-password")
 async def reset_password(
     new_pw: NewPassword,  # Expecting OTP instead of token
@@ -626,8 +626,14 @@ async def reset_password(
 
     # Get OTP from the database based on the email and the code provided
     otp = await get_otp_by_email_and_code(db, email, otp_code)
-    if not otp or otp.expires_at < datetime.utcnow() or otp.is_used:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
+    
+    # Check if the OTP is not found, expired, or already used
+    if not otp:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not found")
+    if otp.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has expired")
+    if otp.is_used:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has already been used")
 
     # Mark OTP as used
     await mark_otp_as_used(db, otp.id)
