@@ -33,3 +33,13 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or use ["http://localhost:8000", "http://localhost:5000"] for specific ones
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
