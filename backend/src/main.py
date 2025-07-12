@@ -10,13 +10,13 @@ from fastapi import FastAPI
 from src.database import engine, Base
 from src.auth import router as auth_router
 from src.story import router as story_router  # New router for story endpoints
-
+from src.api import router as api_router
 app = FastAPI()
 
 # Include auth routes
 app.include_router(auth_router, prefix="/auth")
 app.include_router(story_router, prefix="/story")  # Include story routes
-
+app.include_router(api_router, prefix="/api")
 @app.on_event("startup")
 async def startup():
     # Create database tables

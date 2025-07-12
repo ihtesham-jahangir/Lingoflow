@@ -80,3 +80,8 @@ class StoryResponse(BaseModel):
 class LoginRequest(BaseModel):
     identifier: str  # email OR username
     password: str
+class UserInterestsUpdate(BaseModel):
+    interests: List[str]  # A list of interests, stored as strings
+
+    class Config:
+        orm_mode = True

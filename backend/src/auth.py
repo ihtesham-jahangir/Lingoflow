@@ -259,6 +259,9 @@ async def verify_reset_otp(
     
     return {"message": "OTP successfully verified and password reset allowed"}
 
+class GoogleLoginRequest(BaseModel):
+    code: str
+
 @router.post("/google-login")
 async def google_login(
     request: GoogleLoginRequest,
@@ -267,7 +270,7 @@ async def google_login(
     code = request.code
 
     # Step 1: Exchange code for Google OAuth token
-    token_url = "https://oauth2.googleapis.com/token "
+    token_url = "https://oauth2.googleapis.com/token"
     token_data = {
         "code": code,
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
@@ -287,7 +290,7 @@ async def google_login(
     access_token = token_json.get("access_token")
 
     # Step 2: Get user info from Google
-    user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo "
+    user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
     user_info_response = requests.get(
         user_info_url,
         headers={"Authorization": f"Bearer {access_token}"}
@@ -307,15 +310,15 @@ async def google_login(
             detail="Google account does not have an email address"
         )
 
-    # Step 3: Check if user exists
+    # Step 3: Check if user exists in PostgreSQL
     existing_user = await get_user_by_email(db, email)
 
     if existing_user:
-        # Proceed to generate token
+        # User exists, generate JWT token
         access_token_jwt = create_access_token({"sub": str(existing_user.id)})
         return {"access_token": access_token_jwt, "token_type": "bearer"}
 
-    # Step 4: Create new user
+    # Step 4: Create a new user
     dummy_password = secrets.token_urlsafe(16)
     full_name = user_info.get("name", "")
     name_parts = full_name.split(" ", 1)

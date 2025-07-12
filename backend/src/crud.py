@@ -162,3 +162,24 @@ async def update_reset_password_otp_verified(db: AsyncSession, user_id: int, ver
         await db.refresh(user)
     else:
         raise Exception("User not found")
+# Update User Interests
+async def update_user_interests(db: AsyncSession, user_id: int, interests: list):
+    # Fetch the user by ID
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if user:
+        user.interests = interests
+        db.add(user)
+        await db.commit()
+        return user
+    return None
+
+# Get User Interests
+async def get_user_interests(db: AsyncSession, user_id: int):
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user:
+        return user.interests
+    return None
+

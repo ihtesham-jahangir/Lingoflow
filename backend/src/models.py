@@ -26,6 +26,7 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     is_verified  = Column(Boolean, default=False)
     reset_password_otp_verified = Column(Boolean, default=False)
+    interests = Column(JSON, default=[])
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
