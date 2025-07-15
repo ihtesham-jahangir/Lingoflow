@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
@@ -17,6 +17,8 @@ from typing import Optional
 import time  # For retry logic
 import secrets  # For generating secure tokens
 from src.email_templete import render_email_template
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 from src.security import verify_password
 from src.database import get_db
 from src.schemas import UserCreate, User, Token, PasswordReset, NewPassword , LoginRequest
@@ -264,63 +266,50 @@ class GoogleLoginRequest(BaseModel):
 
 @router.post("/google-login")
 async def google_login(
-    request: GoogleLoginRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    code = request.code
-
-    # Step 1: Exchange code for Google OAuth token
-    token_url = "https://oauth2.googleapis.com/token"
-    token_data = {
-        "code": code,
-        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI"),
-        "grant_type": "authorization_code"
-    }
-
-    token_response = requests.post(token_url, data=token_data)
-    if token_response.status_code != 200:
+    body = await request.json()
+    token = body.get("id_token")
+    
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to exchange Google authorization code for token"
+            detail="Missing id_token"
         )
 
-    token_json = token_response.json()
-    access_token = token_json.get("access_token")
+    try:
+        # Verify the ID token with Google's public keys
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=os.getenv("GOOGLE_CLIENT_ID")
+        )
 
-    # Step 2: Get user info from Google
-    user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
-    user_info_response = requests.get(
-        user_info_url,
-        headers={"Authorization": f"Bearer {access_token}"}
-    )
+        email = idinfo.get("email")
+        full_name = idinfo.get("name", "")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google account does not have an email address"
+            )
 
-    if user_info_response.status_code != 200:
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to fetch user info from Google"
+            detail="Invalid ID token"
         )
 
-    user_info = user_info_response.json()
-    email = user_info.get("email")
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google account does not have an email address"
-        )
-
-    # Step 3: Check if user exists in PostgreSQL
+    # Check if user exists
     existing_user = await get_user_by_email(db, email)
 
     if existing_user:
-        # User exists, generate JWT token
+        # Generate JWT token for existing user
         access_token_jwt = create_access_token({"sub": str(existing_user.id)})
         return {"access_token": access_token_jwt, "token_type": "bearer"}
 
-    # Step 4: Create a new user
+    # Create a new user
     dummy_password = secrets.token_urlsafe(16)
-    full_name = user_info.get("name", "")
     name_parts = full_name.split(" ", 1)
     first_name = name_parts[0]
     last_name = name_parts[1] if len(name_parts) > 1 else ""
