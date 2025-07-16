@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 import requests
 import os
+from src.crud import get_user_by_id
 import pyotp
 import jwt  # PyJWT
 from jwt.exceptions import PyJWTError
@@ -328,3 +329,30 @@ async def google_login(
 
     access_token_jwt = create_access_token({"sub": str(new_user.id)})
     return {"access_token": access_token_jwt, "token_type": "bearer"}
+# Dependency to extract the current user from token
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = decode_token(token)  # Your own util to decode JWT
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except PyJWTError:
+        raise credentials_exception
+
+    user = await get_user_by_id(db, user_id)
+    if user is None:
+        raise credentials_exception
+    return user
+# GET /me route
+@router.get("/me", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
