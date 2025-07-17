@@ -182,14 +182,20 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)) -> User:
 
 
 # ─────────── LOGIN ───────────
-@router.post("/login", response_model=Token)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token:
-    user = await get_user_by_identifier(db, data.identifier)
+@router.post("/login")
+async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+    user: User = await get_user_by_identifier(db, data.identifier)
+    
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     access_token = create_access_token({"sub": str(user.id)})
-    return Token(access_token=access_token, token_type="bearer")
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id
+    }
 # POST /forgot-password
 @router.post("/forgot-password")
 async def forgot_password(
