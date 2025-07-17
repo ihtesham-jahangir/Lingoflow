@@ -269,17 +269,18 @@ async def verify_reset_otp(
     return {"message": "OTP successfully verified and password reset allowed"}
 
 class GoogleLoginRequest(BaseModel):
-    code: str
+    id_token: str
+    access_token: str = None  # Optional for additional verification
 
 @router.post("/google-login")
 async def google_login(
-    request: Request,
+    google_request: GoogleLoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    body = await request.json()
-    token = body.get("id_token")
-    
-    if not token:
+    """
+    Google Sign-In endpoint that accepts ID token from Flutter app
+    """
+    if not google_request.id_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing id_token"
@@ -288,32 +289,60 @@ async def google_login(
     try:
         # Verify the ID token with Google's public keys
         idinfo = id_token.verify_oauth2_token(
-            token,
+            google_request.id_token,
             google_requests.Request(),
             audience=os.getenv("GOOGLE_CLIENT_ID")
         )
-
+        
+        # Additional security checks
+        if idinfo.get('iss') not in ['accounts.google.com', 'https://accounts.google.com']:
+            raise ValueError('Wrong issuer.')
+            
         email = idinfo.get("email")
         full_name = idinfo.get("name", "")
+        google_id = idinfo.get("sub")
+        profile_picture = idinfo.get("picture", "")
+        
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Google account does not have an email address"
             )
+            
+        if not idinfo.get("email_verified", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google account email is not verified"
+            )
 
-    except ValueError:
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid ID token"
+            detail=f"Invalid ID token: {str(e)}"
         )
 
     # Check if user exists
     existing_user = await get_user_by_email(db, email)
 
     if existing_user:
+        # Update Google ID if not present
+        if not existing_user.google_id:
+            await update_user_google_id(db, existing_user.id, google_id)
+        
         # Generate JWT token for existing user
         access_token_jwt = create_access_token({"sub": str(existing_user.id)})
-        return {"access_token": access_token_jwt, "token_type": "bearer"}
+        return {
+            "access_token": access_token_jwt, 
+            "token_type": "bearer",
+            "user": {
+                "id": existing_user.id,
+                "email": existing_user.email,
+                "first_name": existing_user.first_name,
+                "last_name": existing_user.last_name,
+                "username": existing_user.username,
+                "profile_picture": existing_user.profile_picture or profile_picture
+            }
+        }
 
     # Create a new user
     dummy_password = secrets.token_urlsafe(16)
@@ -327,37 +356,27 @@ async def google_login(
         password=dummy_password,
         first_name=first_name,
         last_name=last_name,
-        username=username
+        username=username,
+        google_id=google_id,
+        profile_picture=profile_picture,
+        is_verified=True  # Auto-verify Google users
     )
 
     new_user = await create_user(db, new_user_data.model_dump())
-    await update_user_verified(db, email)  # Auto-verify Google users
-
+    
     access_token_jwt = create_access_token({"sub": str(new_user.id)})
-    return {"access_token": access_token_jwt, "token_type": "bearer"}
-# Dependency to extract the current user from token
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
-):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        payload = decode_token(token)  # Your own util to decode JWT
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except PyJWTError:
-        raise credentials_exception
-
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise credentials_exception
-    return user
+    return {
+        "access_token": access_token_jwt, 
+        "token_type": "bearer",
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "first_name": new_user.first_name,
+            "last_name": new_user.last_name,
+            "username": new_user.username,
+            "profile_picture": new_user.profile_picture
+        }
+    }
 # GET /me route
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
