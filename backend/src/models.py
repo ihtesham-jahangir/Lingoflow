@@ -12,7 +12,7 @@ class User(Base):
     id            = Column(Integer, primary_key=True, index=True)
     email         = Column(String, nullable=False, index=True)
     username      = Column(String(50), nullable=False, index=True)   # ← NEW
-
+    profile_picture   = Column(String, nullable=True)
     first_name    = Column(String(100), nullable=False)              # ← NEW
     last_name     = Column(String(100), nullable=False)              # ← NEW
     country       = Column(String(100))                              # ← NEW

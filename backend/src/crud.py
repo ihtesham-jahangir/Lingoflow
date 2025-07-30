@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models import User, OTP, StorySession
 from src.schemas import StoryStart
 from src.security import get_password_hash
-
+from sqlalchemy import update as sql_update
 
 # ────────────────────────────────────────────────────────────
 # User helpers
@@ -189,3 +189,44 @@ async def get_user_by_id(db, user_id):
     user_id = int(user_id)
     result = await db.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
+async def update_user(db: AsyncSession, user_id: int, update_data: Dict[str, Any]) -> User:
+    """
+    Update a user's information based on user_id and a dictionary of fields to update.
+
+    Args:
+        db (AsyncSession): The database session.
+        user_id (int): The ID of the user to update.
+        update_data (Dict[str, Any]): A dictionary containing the fields and their new values.
+
+    Returns:
+        User: The updated User object.
+
+    Raises:
+        ValueError: If the user with the given ID is not found.
+    """
+    # Create the update statement
+    stmt = sql_update(User).where(User.id == user_id).values(**update_data)
+    
+    # Execute the update statement
+    result = await db.execute(stmt)
+    
+    # Check if any row was matched/updated
+    if result.rowcount == 0:
+        # If no rows were affected, the user likely doesn't exist
+        # You might choose to raise an exception or handle it differently
+        raise ValueError(f"User with id {user_id} not found for update.")
+        
+    # Commit the transaction
+    await db.commit()
+    
+    # Refresh the user instance to get the updated data from the DB
+    # First, we need to fetch the user object
+    updated_user = await get_user_by_id(db, user_id) # Assuming get_user_by_id exists
+    if not updated_user:
+         # This shouldn't happen if the update succeeded, but good to check
+         raise ValueError(f"User with id {user_id} could not be fetched after update.")
+         
+    # Refresh the instance
+    await db.refresh(updated_user)
+    
+    return updated_user

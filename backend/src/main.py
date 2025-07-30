@@ -5,14 +5,14 @@ from dotenv import load_dotenv
 
 # Load environment variables BEFORE any other imports
 load_dotenv()
-
+from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
 from src.database import engine, Base
 from src.auth import router as auth_router
 from src.story import router as story_router  # New router for story endpoints
 from src.api import router as api_router
 app = FastAPI()
-
+app.mount("/media", StaticFiles(directory="media"), name="media")
 # Include auth routes
 app.include_router(auth_router, prefix="/auth")
 app.include_router(story_router, prefix="/story")  # Include story routes

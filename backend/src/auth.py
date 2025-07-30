@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request,File, UploadFile
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
@@ -6,11 +6,14 @@ import requests
 import os
 from src.crud import get_user_by_id
 import pyotp
+from PIL import Image 
 import jwt  # PyJWT
 from jwt.exceptions import PyJWTError
 import logging
 import smtplib
+import uuid
 import ssl
+from typing import Annotated
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -21,16 +24,17 @@ import secrets  # For generating secure tokens
 from src.email_templete import render_email_template
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
-from src.security import verify_password
+from src.security import verify_password , get_password_hash
 from src.database import get_db
-from src.schemas import UserCreate, User, Token, PasswordReset, NewPassword , LoginRequest
+from src.schemas import UserCreate, User, Token, PasswordReset, NewPassword , LoginRequest , UserUpdate
 from src.auth_utils import create_access_token, decode_token, authenticate_user
 from src.crud import (
     get_user_by_email, create_user, update_user_password,
     create_otp, mark_otp_as_used, get_otp_by_email_and_code,
     update_user_verified,
     get_user_by_identifier,
-    get_user_by_username,update_reset_password_otp_verified
+    get_user_by_username,update_reset_password_otp_verified,
+    update_user
 )
 from src.utils import generate_unique_username
 
@@ -49,7 +53,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 200))
 
 # SMTP configuration - Updated for better reliability
 SMTP_SERVER = os.getenv("SMTP_SERVER", "mail.alphanetwork.com.pk")
@@ -568,3 +572,230 @@ async def get_current_user(
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Change the user's password.
+    - User must be authenticated.
+    - Current password must be valid.
+    - New password must be different and meet minimum requirements.
+    """
+    # Fetch the user from the database
+    user = await get_user_by_id(db, current_user.id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Verify current password
+    if not verify_password(request.current_password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+
+    # Prevent using the same password
+    if verify_password(request.new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password"
+        )
+
+    # Optional: Add password strength validation
+    if len(request.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters long"
+        )
+    if not any(c.islower() for c in request.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must contain at least one lowercase letter"
+        )
+    if not any(c.isupper() for c in request.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must contain at least one uppercase letter"
+        )
+    if not any(c.isdigit() for c in request.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must contain at least one digit"
+        )
+    if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in request.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must contain at least one special character"
+        )
+
+    # Hash and update the new password
+    hashed_password = get_password_hash(request.new_password)
+    await update_user_password(db, user.email, hashed_password)
+    return {"message": "Password changed successfully"}
+
+
+UPLOAD_DIR = "media/profile_pics"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# --- Your existing code ---
+@router.post("/profile/upload-profile-picture")
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user), # Assuming get_current_user is defined
+    db: AsyncSession = Depends(get_db) # Assuming get_db is defined
+):
+    """
+    Upload or update user's profile picture.
+    """
+    # Validate file type
+    if not allowed_file(file.filename):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Only images (jpg, jpeg, png, gif) are allowed."
+        )
+
+    # Validate file size (e.g., max 5MB)
+    file.file.seek(0, 2)  # Move to end
+    file_size = file.file.tell()
+    if file_size > 5 * 1024 * 1024:  # 5MB
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File too large. Maximum size is 5MB."
+        )
+    file.file.seek(0)  # Reset pointer
+
+    # Generate unique filename to avoid conflicts
+    ext = file.filename.split(".")[-1]
+    filename = f"{current_user.id}_{uuid.uuid4().hex[:8]}.{ext}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    # Optional: Resize image (e.g., to 300x300)
+    try:
+        image = Image.open(file.file) # <-- This line needs 'from PIL import Image'
+        image = image.convert("RGB")  # Ensure format consistency
+        image = image.resize((300, 300), Image.Resampling.LANCZOS) # <-- This line needs 'from PIL import Image'
+        image.save(file_path, "JPEG", quality=85)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to process image: {str(e)}"
+        )
+    finally:
+        file.file.close()
+
+    # Update user's profile_picture field in DB
+    current_user.profile_picture = f"/media/profile_pics/{filename}"
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {
+        "message": "Profile picture uploaded successfully",
+        # --- Fix the typo here ---
+        "profile_picture": current_user.profile_picture # <-- Was profile_profile_picture
+        # --- End fix ---
+    }
+# --- End of your existing code ---
+@router.patch("/api/users/me") # Ensure this path matches your OpenAPI spec
+async def update_user_profile(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update current user's profile information.
+
+    Only fields provided in the request will be updated.
+    Email and username updates have additional validation.
+    """
+    # Get the current user from DB (fresh data)
+    db_user = await get_user_by_id(db, current_user.id)
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Prepare update data, filtering out None values (using Pydantic's exclude_unset)
+    update_data = user_update.model_dump(exclude_unset=True)
+    # If you want to exclude None values explicitly, you can also do:
+    # update_data = {k: v for k, v in user_update.model_dump().items() if v is not None}
+
+    # If no data is provided to update, return the user as is
+    if not update_data:
+        return {
+            "message": "No data provided for update.",
+            "user": db_user
+        }
+
+    # Validate email if provided
+    if "email" in update_data and update_data["email"] != db_user.email:
+        # Check if email already exists
+        existing_email = await get_user_by_email(db, update_data["email"])
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+
+    # Validate username if provided
+    if "username" in update_data: # Check if username is in the update data
+        new_username = update_data["username"]
+        # If username is explicitly set to None or empty string, you might want to generate one
+        # Or reject it. Here, we assume empty string means generate.
+        if new_username == "" or new_username is None:
+            update_data["username"] = await generate_unique_username(db)
+        # Check if the new username (if provided and not empty/generated) already exists
+        elif new_username != db_user.username: # Only check if it's actually changing
+            existing_username = await get_user_by_username(db, new_username)
+            if existing_username:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Username already taken"
+                )
+        # If new_username is the same as db_user.username, no need to do anything for username
+
+    # Validate date of birth format if provided
+    # Note: If date_of_birth comes from Pydantic as a date object, this might not be needed
+    # unless you are sending it as a string.
+    if "date_of_birth" in update_data and isinstance(update_data["date_of_birth"], str):
+        # Ensure it's a valid date string if it's a string
+        try:
+             update_data["date_of_birth"] = date.fromisoformat(update_data["date_of_birth"])
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format for date_of_birth. Use YYYY-MM-DD."
+            )
+
+
+    try:
+        # Update the user using the crud function
+        updated_user = await update_user(db, db_user.id, update_data)
+
+        return {
+            "message": "Profile updated successfully",
+            "user": updated_user
+        }
+    except ValueError as e: # Catch potential errors from update_user
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND if "not found" in str(e).lower() else status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    # General exceptions will be caught by FastAPI's error handlers
